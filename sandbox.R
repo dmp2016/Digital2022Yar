@@ -4,7 +4,7 @@
 
 # install.packages("kernlab")
 
-# library(kernlab)
+library(kernlab)
 library(tidyverse)
 library(lubridate)
 
@@ -29,7 +29,7 @@ get_cross_validation <- function(df_data, train_percent){
 df_data <- read_csv("train.csv")
 df_data_orig <- df_data
 
-colnames(df_data)
+cat(colnames(df_data))
 
 
 prepare_data <- function(df_data){
@@ -40,16 +40,32 @@ prepare_data <- function(df_data){
   df_data$`Курит сейчас` <- df_data$`Статус Курения` == "Курит"
   df_data$`Алкоголь сейчас` <- df_data$Алкоголь == "употребляю в настоящее время"
   df_data <- df_data %>% filter(!is.na(Пол))
-  df_data$Sex <- ifelse(df_data$Пол == "М", 1, 0)
+  df_data$ID_y <- NULL
   
   return(df_data)
-  
 }
 
 
 df_data <- prepare_data(df_data)
 
 # Функции обучения и прогнозирования
+
+
+predict_svm <- function(formula, df_train, df_test){
+  fit <- ksvm(formula,
+              data = df_train,
+              kernel = "rbfdot", C = 1)
+  
+  nm <- names(df_train %>% select(
+    -`Артериальная гипертензия`, 
+    -ОНМК, 
+    -`Стенокардия, ИБС, инфаркт миокарда`, 
+    -`Сердечная недостаточность`, 
+    -`Прочие заболевания сердца`))
+  
+  return(predict(fit, rbind(df_test[nm], df_train[nm]))[1:nrow(df_test)])
+}
+
 
 predict_glm <- function(formula, df_train, df_test){
   fit <- glm(formula = formula,
@@ -95,6 +111,19 @@ opt_prob_lim <- function(formula, predict_fun, test_column){
 
 # Артериальная гипертензия
 
+temp <- glm(formula = `Артериальная гипертензия`~ . ,
+      data = df_data %>% select(# -`Артериальная гипертензия`, 
+                                -ОНМК,
+                                -`Стенокардия, ИБС, инфаркт миокарда`,
+                                -`Сердечная недостаточность`,
+                                -`Прочие заболевания сердца`,
+                                -ID,
+                                -ID_y),
+    family = binomial())
+
+summary(temp)
+
+
 formula_ag <- (`Артериальная гипертензия` ~
                  #  `Пол`
                  `Вы работаете?`
@@ -102,6 +131,8 @@ formula_ag <- (`Артериальная гипертензия` ~
                + `Сахарный диабет`
                + `Бронжиальная астма`
                + `Образование`
+               + Переломы
+               # + Профессия
                # + `Время пробуждения`
                # + `Сигарет в день`
                # + `Выход на пенсию`
@@ -111,13 +142,16 @@ formula_ag <- (`Артериальная гипертензия` ~
                # + `Курит сейчас`
                # + `Возраст курения`
                # + `Сон после обеда`
-               + `Травмы за год`
+               # + `Травмы за год`
                # + `Прекращение работы по болезни`
                # + `Время засыпания`:`Время пробуждения`
                )
 
 res_ag <- opt_prob_lim(formula_ag,
                        predict_glm, "Артериальная гипертензия")
+
+res_ag <- opt_prob_lim(formula_ag,
+                       predict_svm, "Артериальная гипертензия")
 
 
 print(res_ag)
@@ -145,7 +179,6 @@ formula_onmk <- (`ОНМК` ~
                  
 res_onmk <- opt_prob_lim(formula_onmk,
                          predict_glm, "ОНМК")
-
 
 print(res_onmk)
 mean_onmk <- res_onmk$estimate
@@ -180,7 +213,6 @@ formula_st <- (`Стенокардия, ИБС, инфаркт миокарда`
 res_st <- opt_prob_lim(formula_st,
                        predict_glm, "Стенокардия, ИБС, инфаркт миокарда")
 
-
 print(res_st)
 mean_st <- res_st$estimate
 limit_st <- res_st$limit
@@ -214,7 +246,6 @@ res_sn <- opt_prob_lim(formula_sn,
                        predict_glm, 
                        "Сердечная недостаточность")
 
-
 print(res_sn)
 mean_sn <- res_sn$estimate
 limit_sn <- res_sn$limit
@@ -225,11 +256,11 @@ limit_sn <- res_sn$limit
 # Прочие заболевания сердца
 
 
-fit_ag <- glm(formula = formula_ag,
-              data = df_data,
-              family = binomial())
-
-df_data$ag <- predict(fit_ag, df_data, type = "response")
+# fit_ag <- glm(formula = formula_ag,
+#               data = df_data,
+#               family = binomial())
+# 
+# df_data$ag <- predict(fit_ag, df_data, type = "response")
 
 
 formula_another <- (`Прочие заболевания сердца` ~ 
@@ -256,6 +287,7 @@ formula_another <- (`Прочие заболевания сердца` ~
 res_another <- opt_prob_lim(formula_another,
                             predict_glm, "Прочие заболевания сердца")
 
+
 print(res_another)
 mean_another <- res_another$estimate
 limit_another <- res_another$limit
@@ -275,7 +307,8 @@ df_test_final$`Статус Курения`[df_test_final$`Статус Куре
 df_test_final <- prepare_data(df_test_final)
 
 
-df_test_final$`Артериальная гипертензия` <- ifelse(predict_glm(formula_ag, df_train = df_data, df_test = df_test_final) < limit_ag, 0, 1)
+# df_test_final$`Артериальная гипертензия` <- ifelse(predict_glm(formula_ag, df_train = df_data, df_test = df_test_final) < limit_ag, 0, 1)
+df_test_final$`Артериальная гипертензия` <- ifelse(predict_svm(formula_ag, df_train = df_data, df_test = df_test_final) < limit_ag, 0, 1)
 df_test_final$`ОНМК` <- ifelse(predict_glm(formula_onmk, df_train = df_data, df_test = df_test_final) < limit_onmk, 0, 1)
 df_test_final$`Стенокардия, ИБС, инфаркт миокарда` <- ifelse(predict_glm(formula_st, df_train = df_data, df_test = df_test_final) < limit_st, 0, 1)
 df_test_final$`Сердечная недостаточность` <- ifelse(predict_glm(formula_sn, df_train = df_data, df_test = df_test_final) < limit_sn, 0, 1)
