@@ -211,14 +211,13 @@ formula_ag <- (`Артериальная гипертензия` ~
                  `Вы работаете?`
                + `Регулярный прим лекарственных средств`
                + `Сахарный диабет`
-               # + `Бронжиальная астма`
+               + `Бронжиальная астма`
                + `Образование`
                + Переломы
-               # + `Время пробуждения`
                # + Профессия
                # + `Время пробуждения`
                # + `Сигарет в день`
-               + `Выход на пенсию`
+               # + `Выход на пенсию`
                # + `Алкоголь`
                # + `Возраст алког`
                # + `Алкоголь сейчас`
@@ -228,14 +227,14 @@ formula_ag <- (`Артериальная гипертензия` ~
                # + `Травмы за год`
                # + `Прекращение работы по болезни`
                # + `Время засыпания`:`Время пробуждения`
-)
+               )
 
-res_ag <- opt_prob_lim(formula_ag,
-                       predict_glm, "Артериальная гипертензия")
-
-# C_svm <- 1
 # res_ag <- opt_prob_lim(formula_ag,
-#                        predict_svm, "Артериальная гипертензия")
+#                        predict_glm, "Артериальная гипертензия")
+
+C_svm <- 1
+res_ag <- opt_prob_lim(formula_ag,
+                       predict_svm, "Артериальная гипертензия")
 
 print(res_ag)
 mean_ag <- res_ag$estimate
@@ -294,16 +293,14 @@ formula_onmk <- (`ОНМК` ~
                  + `Регулярный прим лекарственных средств`
                  + `Статус Курения`
                  # + `Курит сейчас`
-                 + `Сон после обеда`
+                 # + `Сон после обеда`
                  + `Образование`
-                 + `Прекращение работы по болезни`
-                 + `Время засыпания`
-                 # + `Время засыпания`:`Время пробуждения`
+                 + `Время засыпания`:`Время пробуждения`
                  # + `Возраст алког`
                  # + `Возраст курения`
                  # + `Травмы за год`
                  # + I(`Сигарет в день`^0.5)
-)
+                 )
                  
 res_onmk <- opt_prob_lim(formula_onmk,
                          predict_glm, "ОНМК")
@@ -533,7 +530,8 @@ formula_another <- (`Прочие заболевания сердца` ~
                     + I(`Сигарет в день`^2)
                     # + sn
                     # + `Выход на пенсию`
-)
+                    )
+
 res_another <- opt_prob_lim(formula_another,
                             predict_glm, "Прочие заболевания сердца")
 
@@ -560,9 +558,9 @@ df_test_final$`Статус Курения`[df_test_final$`Статус Куре
 df_test_final <- prepare_data(df_test_final)
 
 
-df_test_final$`Артериальная гипертензия` <- ifelse(predict_glm(formula_ag, df_train = df_data, df_test = df_test_final) < limit_ag, 0, 1)
-# C_svm <- 1
-# df_test_final$`Артериальная гипертензия` <- ifelse(predict_svm(formula_ag, df_train = df_data, df_test = df_test_final) < limit_ag, 0, 1)
+# df_test_final$`Артериальная гипертензия` <- ifelse(predict_glm(formula_ag, df_train = df_data, df_test = df_test_final) < limit_ag, 0, 1)
+C_svm <- 1
+df_test_final$`Артериальная гипертензия` <- ifelse(predict_svm(formula_ag, df_train = df_data, df_test = df_test_final) < limit_ag, 0, 1)
 df_test_final$`ОНМК` <- ifelse(predict_glm(formula_onmk, df_train = df_data, df_test = df_test_final) < limit_onmk, 0, 1)
 df_test_final$`Стенокардия, ИБС, инфаркт миокарда` <- ifelse(predict_glm(formula_st, df_train = df_data, df_test = df_test_final) < limit_st, 0, 1)
 df_test_final$`Сердечная недостаточность` <- ifelse(predict_glm(formula_sn, df_train = df_data, df_test = df_test_final) < limit_sn, 0, 1)
