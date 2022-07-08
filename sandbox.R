@@ -140,8 +140,8 @@ opt_prob_lim <- function(formula, predict_fun, test_column){
                                                           )
                        )
                 )
-    # # Убираем выбросы. Нет, не стоит, выбросы нетипичны
-    # v <- v[quantile(v, 0.05) <= v & v <= quantile(v, 0.95)]
+    # Убираем выбросы. Нет, не стоит, выбросы нетипичны
+    v <- v[quantile(v, 0.025) <= v & v <= quantile(v, 0.975)]
     # Оцениваем среднее
     est <- mean(v)
     # print(c(est, cur_lim))
@@ -153,56 +153,23 @@ opt_prob_lim <- function(formula, predict_fun, test_column){
   v_metrics <- unlist(lapply(test_list, 
                              function(x) get_metrics(y_true = x$y_true,
                                                      y_pred = ifelse(x$probs < limit, 0, 1))))
+  v_metrics <- v_metrics[quantile(v_metrics, 0.025) <= v_metrics & v_metrics <= quantile(v_metrics, 0.975)]
   v_sd <- sd(v_metrics)
   return(list(estimate = estimates[ind],
               estimate_sigma = v_sd,
               estimate_conf = c(estimates[ind] - v_sd, estimates[ind] + v_sd),
-              limit_sd = v_sd / sqrt(test_cnt),
+              limit_sd = v_sd / sqrt(length(v_metrics)),
               limit = limit, 
               v_metrics = v_metrics))
 }
 
 
-# Old Version
-opt_prob_lim <- function(formula, predict_fun, test_column){
-  test_cnt = 30
-  test_list <- list()
-  
-  set.seed(42)
-  res_vec <- c()
-  for (test_num in 1:test_cnt) {
-    cv = get_cross_validation(df_data, 70)
-    
-    probs <- predict_fun(formula, cv$train, cv$test)
-    test_list[[test_num]] <- list(probs = probs, y_true = cv$test[test_column])
-  }
-  
-  # Оптимизация порога
-  
-  estimates <- c()
-  cur_lim <- 0.01
-  while (cur_lim < 1) {
-    # predict_list <- lapply(probs_list, function(x) ifelse(x < cur_lim, 0, 1))
-    est <- mean(unlist(lapply(test_list, function(x) get_metrics(y_true = x$y_true,
-                                                                 y_pred = ifelse(x$probs < cur_lim, 0, 1)
-    )
-    )
-    )
-    )
-    print(c(est, cur_lim))
-    estimates <- c(estimates, est)
-    cur_lim <- cur_lim + 0.01
-  }
-  return(list(estimate = max(estimates), limit = which.max(estimates) * 0.01))
-}
-
 print_res_opt <- function(res_opt){
-  print(res_opt)
-  # print(paste("Оценка:", res_opt$estimate))
-  # print(paste("Сигма:", res_opt$estimate_sigma))
-  # print(paste("Доверительный интервал: (", res_opt$estimate_conf[1], res_opt$estimate_conf[2], ")"))
-  # print(paste("Сигма для оценки среднего:", res_opt$limit_sd))
-  # print(paste("Порог:", res_opt$limit))
+  print(paste("Оценка:", res_opt$estimate))
+  print(paste("Сигма:", res_opt$estimate_sigma))
+  print(paste("Доверительный интервал: (", res_opt$estimate_conf[1], res_opt$estimate_conf[2], ")"))
+  print(paste("Сигма для оценки среднего:", res_opt$limit_sd))
+  print(paste("Порог:", res_opt$limit))
   
 }
 
@@ -263,7 +230,7 @@ formula_ag <- (`Артериальная гипертензия` ~
                + `Бронжиальная астма`
                + `Образование`
                + Переломы
-               # + Профессия
+               + Профессия
                # + `Время пробуждения`
                # + `Сигарет в день`
                # + `Выход на пенсию`
@@ -278,8 +245,8 @@ formula_ag <- (`Артериальная гипертензия` ~
                # + `Время засыпания`:`Время пробуждения`
                )
 
-res_ag <- opt_prob_lim(formula_ag,
-                       predict_glm, "Артериальная гипертензия")
+# res_ag <- opt_prob_lim(formula_ag,
+#                        predict_glm, "Артериальная гипертензия")
 
 C_svm <- 1
 res_ag <- opt_prob_lim(formula_ag,
@@ -344,19 +311,17 @@ formula_onmk <- (`ОНМК` ~
                  # + `Курит сейчас`
                  # + `Сон после обеда`
                  + `Образование`
-                 + `Время засыпания old`:`Время пробуждения old`
+                 # + `Время засыпания old`:`Время пробуждения old`
                  # + `Возраст алког`
                  # + `Возраст курения`
                  # + `Травмы за год`
                  # + I(`Сигарет в день`^0.5)
+                 + `Время засыпания`
+                 # + `Спорт, клубы`
                  )
                  
 res_onmk <- opt_prob_lim(formula_onmk,
                          predict_glm, "ОНМК")
-
-# C_svm <- 2
-# res_onmk <- opt_prob_lim(formula_onmk,
-#                          predict_svm, "ОНМК")
 
 print_res_opt(res_onmk)
 mean_onmk <- res_onmk$estimate
@@ -500,9 +465,10 @@ formula_sn <- (`Сердечная недостаточность` ~
                # + `Травмы за год`
                # + `Сигарет в день`
                # + `Время пробуждения`
-               # + `Время засыпания`
+               + `Время засыпания`
                # + `Время засыпания`:`Время пробуждения`
                # + `Туберкулез легких`
+               # + `Частота пасс кур`
 )
 
 res_sn <- opt_prob_lim(formula_sn,
