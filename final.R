@@ -1,0 +1,325 @@
+# +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Окончательный вариант обучения и прогноза
+# +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+library(tidyverse)
+library(lubridate)
+
+
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Читаем и готовим данные ----
+
+df_data_orig <- read_csv("train.csv")
+
+colnames(df_data_orig)
+
+# Подготовка данных
+prepare_data <- function(df_data){
+  # Не курит, то количество сигарет в день = 0
+  df_data$`Сигарет в день`[is.na(df_data$`Сигарет в день`)] <- 0
+  df_data$`Сигарет в день old` <- df_data$`Сигарет в день`
+  # Делаем среднее == 0
+  df_data$`Сигарет в день` <- df_data$`Сигарет в день`- mean(df_data$`Сигарет в день`)
+  
+  # Если не курит, то возраст курения == 0
+  df_data$`Возраст курения`[is.na(df_data$`Возраст курения`)] <- 0
+  df_data$`Возраст курения` <- df_data$`Возраст курения` - mean(df_data$`Возраст курения`)
+  
+  # В случае Не принимает считаем возраст алког == 0  
+  df_data$`Возраст алког`[is.na(df_data$`Возраст алког`)] <- 0
+  df_data$`Возраст алког` <- df_data$`Возраст алког` - mean(df_data$`Возраст алког`)
+  
+  # Вводим дополнительный признак для статуса курения
+  df_data$`Курит сейчас` <- df_data$`Статус Курения` == "Курит"
+  
+  # Вводим дополнительный признак для статуса Алкоголя
+  df_data$`Алкоголь сейчас` <- df_data$Алкоголь == "употребляю в настоящее время"
+  
+  # Случае отсутствия пссивного курения считаем устанавливаем частоту "Нет"
+  df_data$`Частота пасс кур`[is.na(df_data$`Частота пасс кур`)] <- "Нет"
+  
+  # На всякий случай запоминаем старые значения Время засыпания и Время пробуждения
+  df_data$`Время засыпания old` <- df_data$`Время засыпания`
+  df_data$`Время пробуждения old` <- df_data$`Время пробуждения`
+  
+  # Время засыпания преобразуем в кол-во часов, начиная от начала суток: текущих или предудыщих,
+  # в зависимости от засыпания до или после полуночи
+  df_data$`Время засыпания` <- as.integer(substr(df_data$`Время засыпания`, 1, 2)) + 
+    as.integer(substr(df_data$`Время засыпания`, 4, 5)) / 60
+  
+  df_data$`Время засыпания` <- ifelse(df_data$`Время засыпания` < 12, 
+                                      df_data$`Время засыпания` + 24,
+                                      df_data$`Время засыпания`)
+  
+  # Среднее значение делаем равным нуля
+  df_data$`Время засыпания` <- df_data$`Время засыпания` - mean(df_data$`Время засыпания`)
+  
+  # Время пробуждения преобразуем в кол-во часов, начиная от начала суток
+  df_data$`Время пробуждения` <- as.integer(substr(df_data$`Время пробуждения`, 1, 2)) + 
+    as.integer(substr(df_data$`Время пробуждения`, 4, 5)) / 60
+  
+  # Среднее значение делаем равным нуля
+  df_data$`Время пробуждения` <- df_data$`Время пробуждения` - mean(df_data$`Время пробуждения`)
+  
+  df_data <- df_data %>% filter(!is.na(Пол))
+  df_data$ID_y <- NULL
+  
+  return(df_data)
+}
+
+
+# Подготовленный обучающий датасет
+df_data <- prepare_data(df_data_orig)
+
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Функции метрики и кроссвалидации ----
+
+get_metrics <- function(y_true, y_pred){
+  v1 <- sum(y_true == 1 & y_pred == 1) / (sum(y_true == 1 & y_pred == 1) + sum(y_pred == 0 & y_true == 1))
+  v2 <- sum(y_true == 0 & y_pred == 0) / (sum(y_true == 0 & y_pred == 0) + sum(y_pred == 1 & y_true == 0))
+  return(0.5*v1 + 0.5*v2)
+}
+
+
+get_cross_validation <- function(df_data_orig, train_percent){
+  train_ind <- sample.int(nrow(df_data_orig), floor(nrow(df_data_orig) * train_percent / 100))
+  return(list(train = prepare_data(df_data_orig[train_ind, ]), test=prepare_data(df_data_orig[-train_ind, ])))
+}
+
+
+
+# Выделяем тренировочный и контрольный датасеты для проверка качества на данных, не использованных при обучении
+set.seed(24)
+cv <- get_cross_validation(df_data_orig, 70)
+df_train_ext <- cv$train
+df_test_ext <- cv$test
+cv <- NULL
+
+
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Функции обучения и прогнозирования ----
+
+
+# Выполняет обучение на данных df_train и возвращает прогноз для df_test
+train_and_predict <- function(formula, df_train, df_test, test_column){
+  # Получаем прогноз в виде вероятностей
+  fit <- glm(formula = formula,
+             data = df_train,
+             family = binomial())
+  
+  probs_train <- predict(fit, df_train, type = "response")
+  
+  # Оптимизация порога
+  
+  estimates <- c()
+  cur_lim <- 0.01
+  while (cur_lim < 1) {
+    # Строим оценки для порога cur_lim на разбиениях выборки
+    est <- get_metrics(y_true = df_train[test_column], y_pred = ifelse(probs_train < cur_lim, 0, 1))
+    estimates <- c(estimates, est)
+    cur_lim <- cur_lim + 0.01
+  }
+  ind <- which.max(estimates)
+  limit <- 0.01*ind
+  
+  probs_test <- predict(fit, df_test, type = "response")
+  return(ifelse(probs_test < limit, 0, 1))
+}
+
+
+# Проверка качества 
+check_quality <- function(formula, df_train, df_test, test_column){
+  get_metrics(y_true = df_test[test_column],
+              y_pred = train_and_predict(formula, df_train, df_test, test_column))
+}
+
+
+last_cv_metrics <- NULL
+
+# Проверка качества на кросс-валидации
+check_quality_cv <- function(formula, df_data_orig, test_column){
+  test_cnt <- 50
+  
+  set.seed(42)
+  v_metrics <- c()
+  for (test_num in 1:test_cnt){
+    cv <- get_cross_validation(df_data_orig, 70)
+    v_metrics[test_num] <- check_quality(formula, cv$train, cv$test, test_column)
+  }
+  # Сохраним последний набор метрик. Он пригодится для того, чтобы оценить 
+  # Время от времени оценить проверить закон распределения метрик при кроссвалидации.
+  # Проверить унимодальность, нормальность и др.
+  last_cv_metrics <<- v_metrics
+  return(list(est_mean=mean(v_metrics),
+              est_sd = sd(v_metrics)))
+}
+
+
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Артериальная гипертензия ----
+
+formula_ag <- (`Артериальная гипертензия` ~
+                 `Вы работаете?`
+               + `Регулярный прим лекарственных средств`
+               + `Сахарный диабет`
+               + I(`Образование` == "5 - ВУЗ")
+               + I(`Семья` == "вдовец / вдова")
+               + Переломы
+)
+
+model_ag <- glm(formula_ag, df_data, family = binomial())
+summary(model_ag)
+
+check_quality(formula_ag, df_data, df_data, "Артериальная гипертензия")
+check_quality(formula_ag, df_train_ext, df_test_ext, "Артериальная гипертензия")
+
+check_quality_cv(formula_ag, df_data_orig, "Артериальная гипертензия")
+# shapiro.test(last_cv_metrics)
+# hist(last_cv_metrics, 8)
+
+
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# ОНМК ----
+
+formula_onmk <- (`ОНМК` ~
+                   Пол
+                 + `Регулярный прим лекарственных средств`
+                 + `Статус Курения`
+                 + `Прекращение работы по болезни`
+                 + `Образование`
+)
+
+model_onmk <- glm(formula_onmk, df_data, family = binomial())
+summary(model_onmk)
+
+check_quality(formula_onmk, df_data, df_data, "ОНМК")
+check_quality(formula_onmk, df_train_ext, df_test_ext, "ОНМК")
+check_quality_cv(formula_onmk, df_data_orig, "ОНМК")
+shapiro.test(last_cv_metrics)
+
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Стенокардия, ИБС, инфаркт миокарда ----
+
+formula_st <- (`Стенокардия, ИБС, инфаркт миокарда` ~ 
+                 `Вы работаете?`
+               * `Регулярный прим лекарственных средств`
+               + `Переломы`
+               + `Алкоголь`
+               + `Образование`
+               + I(`Сигарет в день old`^0.25)
+)
+
+
+model_st <- glm(formula_st, df_data, family = binomial())
+summary(model_st)
+
+
+check_quality(formula_st, df_data, df_data, "Стенокардия, ИБС, инфаркт миокарда")
+check_quality(formula_st, df_train_ext, df_test_ext, "Стенокардия, ИБС, инфаркт миокарда")
+check_quality_cv(formula_st, df_data_orig, "Стенокардия, ИБС, инфаркт миокарда")
+
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Сердечная недостаточность ----
+
+
+formula_sn <- (`Сердечная недостаточность` ~ 
+                 `Регулярный прим лекарственных средств`
+               + `Выход на пенсию`
+               + `Алкоголь сейчас`
+               + `Образование`
+)
+
+model_sn <- glm(formula_sn, df_data, family = binomial())
+summary(model_sn)
+
+
+check_quality(formula_sn, df_data, df_data, "Сердечная недостаточность")
+check_quality(formula_sn, df_train_ext, df_test_ext, "Сердечная недостаточность")
+check_quality_cv(formula_sn, df_data_orig, "Сердечная недостаточность")
+
+
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Прочие заболевания сердца ----
+
+
+formula_another <- (`Прочие заболевания сердца` ~ 
+                      `Регулярный прим лекарственных средств`
+                    + `Сон после обеда`
+                    + `Алкоголь сейчас`
+)
+
+model_another <- glm(formula_another, df_data, family = binomial())
+summary(model_another)
+
+
+check_quality(formula_another, df_data, df_data, "Прочие заболевания сердца")
+check_quality(formula_another, df_train_ext, df_test_ext, "Прочие заболевания сердца")
+check_quality_cv(formula_another, df_data_orig, "Прочие заболевания сердца")
+
+
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Оценка среднего значения полученных метрик по всем болезням ----
+
+print(paste("Оценка по обучающему набору:",
+            (check_quality(formula_ag, df_data, df_data, "Артериальная гипертензия") +
+               check_quality(formula_onmk, df_data, df_data, "ОНМК") +
+               check_quality(formula_st, df_data, df_data, "Стенокардия, ИБС, инфаркт миокарда") +
+               check_quality(formula_sn, df_data, df_data, "Сердечная недостаточность") +
+               check_quality(formula_another, df_data, df_data, "Прочие заболевания сердца")
+            ) / 5))
+
+
+print(paste("Оценка по разбиению обучение/тест:",
+            (check_quality(formula_ag, df_train_ext, df_test_ext, "Артериальная гипертензия") +
+               check_quality(formula_onmk, df_train_ext, df_test_ext, "ОНМК") +
+               check_quality(formula_st, df_train_ext, df_test_ext, "Стенокардия, ИБС, инфаркт миокарда") +
+               check_quality(formula_sn, df_train_ext, df_test_ext, "Сердечная недостаточность") +
+               check_quality(formula_another, df_train_ext, df_test_ext, "Прочие заболевания сердца")
+            ) / 5))
+
+
+print(paste("Общая оценка по кросс-валидации:",
+            (check_quality_cv(formula_ag, df_data_orig, "Артериальная гипертензия")$est_mean +
+               check_quality_cv(formula_onmk, df_data_orig, "ОНМК")$est_mean +
+               check_quality_cv(formula_st, df_data_orig, "Стенокардия, ИБС, инфаркт миокарда")$est_mean +
+               check_quality_cv(formula_sn, df_data_orig, "Сердечная недостаточность")$est_mean +
+               check_quality_cv(formula_another, df_data_orig, "Прочие заболевания сердца")$est_mean
+            ) / 5))
+
+
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Обучение полученных выше моделей на тренировочном датасете и формирование тестового датасета ----
+
+
+df_test_final <- read_csv("test_dataset_test.csv")
+
+df_test_final$`Статус Курения`[df_test_final$`Статус Курения` == "Никогда не курил"] <- "Никогда не курил(а)"
+
+df_test_final <- prepare_data(df_test_final)
+
+
+df_test_final$`Артериальная гипертензия` <- train_and_predict(formula_ag, df_data, df_test_final, "Артериальная гипертензия")
+df_test_final$`ОНМК` <- train_and_predict(formula_onmk, df_data, df_test_final, "ОНМК")
+df_test_final$`Стенокардия, ИБС, инфаркт миокарда` <- train_and_predict(formula_st, df_data, df_test_final, "Стенокардия, ИБС, инфаркт миокарда")
+df_test_final$`Сердечная недостаточность` <- train_and_predict(formula_sn, df_data, df_test_final, "Сердечная недостаточность")
+df_test_final$`Прочие заболевания сердца` <- train_and_predict(formula_another, df_data, df_test_final, "Прочие заболевания сердца")
+
+
+df_final_sol <- df_test_final %>% select(ID, 
+                                         `Артериальная гипертензия`, 
+                                         `ОНМК`, 
+                                         `Стенокардия, ИБС, инфаркт миокарда`,
+                                         `Сердечная недостаточность`,
+                                         `Прочие заболевания сердца`)
+
+write_csv(df_final_sol, "final_solution.csv")
+
+df_sample_sol <- read_csv("sample_solution.csv")
+
+
+sum(df_final_sol$ID != df_sample_sol$ID)
+sum(colnames(df_final_sol) != colnames(df_sample_sol))
+
+
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
