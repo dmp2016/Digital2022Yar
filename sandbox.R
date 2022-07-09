@@ -71,6 +71,10 @@ prepare_data <- function(df_data){
 df_data <- prepare_data(df_data)
 
 
+set.seed(24)
+inds <- sample(1:nrow(df_data), 250)
+df_indep_test <- df_data[inds, ]
+df_data <- df_data[-inds, ]
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # neuralnet
@@ -173,6 +177,31 @@ print_res_opt <- function(res_opt){
   
 }
 
+
+opt_lim_no_cv <- function(formula, predict_fun, test_column){
+  probs <- predict_fun(formula, df_data, df_data)
+
+  # Оптимизация порога
+  
+  estimates <- c()
+  cur_lim <- 0.01
+  while (cur_lim < 1) {
+    # Строим оценки для порога cur_lim на разбиениях выборки
+    est <- get_metrics(y_true = df_data[test_column], y_pred = ifelse(probs < cur_lim, 0, 1))
+    estimates <- c(estimates, est)
+    cur_lim <- cur_lim + 0.01
+  }
+  ind <- which.max(estimates)
+  limit <- 0.01*ind
+  v_sd <- sd(estimates)
+  return(list(estimate = estimates[ind],
+              estimate_sigma = v_sd,
+              estimate_conf = c(estimates[ind] - v_sd, estimates[ind] + v_sd),
+              limit = limit,
+              estimates = estimates))
+}
+
+
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # Артериальная гипертензия ----
 
@@ -245,14 +274,14 @@ formula_ag <- (`Артериальная гипертензия` ~
                # + `Время засыпания`:`Время пробуждения`
                )
 
+res_ag <- opt_lim_no_cv(formula_ag,
+                        predict_glm, "Артериальная гипертензия")
+
+# C_svm <- 1
 # res_ag <- opt_prob_lim(formula_ag,
-#                        predict_glm, "Артериальная гипертензия")
+#                        predict_svm, "Артериальная гипертензия")
 
-C_svm <- 1
-res_ag <- opt_prob_lim(formula_ag,
-                       predict_svm, "Артериальная гипертензия")
-
-print_res_opt(res_ag)
+print(res_ag)
 mean_ag <- res_ag$estimate
 limit_ag <- res_ag$limit
 
@@ -308,6 +337,7 @@ formula_onmk <- (`ОНМК` ~
                    Пол
                  + `Регулярный прим лекарственных средств`
                  + `Статус Курения`
+                 + `Прекращение работы по болезни`
                  # + `Курит сейчас`
                  # + `Сон после обеда`
                  + `Образование`
@@ -318,10 +348,10 @@ formula_onmk <- (`ОНМК` ~
                  # + I(`Сигарет в день`^0.5)
                  )
                  
-res_onmk <- opt_prob_lim(formula_onmk,
+res_onmk <- opt_lim_no_cv(formula_onmk,
                          predict_glm, "ОНМК")
 
-print_res_opt(res_onmk)
+print(res_onmk)
 mean_onmk <- res_onmk$estimate
 limit_onmk <- res_onmk$limit
 
@@ -394,10 +424,10 @@ formula_st <- (`Стенокардия, ИБС, инфаркт миокарда`
 )
 
 
-res_st <- opt_prob_lim(formula_st,
-                       predict_glm, "Стенокардия, ИБС, инфаркт миокарда")
+res_st <- opt_lim_no_cv(formula_st,
+                        predict_glm, "Стенокардия, ИБС, инфаркт миокарда")
 
-print_res_opt(res_st)
+print(res_st)
 mean_st <- res_st$estimate
 limit_st <- res_st$limit
 
@@ -469,11 +499,11 @@ formula_sn <- (`Сердечная недостаточность` ~
                # + `Частота пасс кур`
 )
 
-res_sn <- opt_prob_lim(formula_sn,
-                       predict_glm, 
-                       "Сердечная недостаточность")
+res_sn <- opt_lim_no_cv(formula_sn,
+                        predict_glm, 
+                        "Сердечная недостаточность")
 
-print_res_opt(res_sn)
+print(res_sn)
 mean_sn <- res_sn$estimate
 limit_sn <- res_sn$limit
 
@@ -545,11 +575,11 @@ formula_another <- (`Прочие заболевания сердца` ~
                     # + `Выход на пенсию`
                     )
 
-res_another <- opt_prob_lim(formula_another,
-                            predict_glm, "Прочие заболевания сердца")
+res_another <- opt_lim_no_cv(formula_another,
+                             predict_glm, "Прочие заболевания сердца")
 
 
-print_res_opt(res_another)
+print(res_another)
 mean_another <- res_another$estimate
 limit_another <- res_another$limit
 
@@ -558,6 +588,27 @@ limit_another <- res_another$limit
 # Оценка среднего значения полученных метрик по всем болезням ----
 
 print(paste("Общая оценка:", (mean_ag + mean_onmk + mean_st + mean_sn + mean_another) / 5))
+
+
+# +++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Проверка результата на датасете, который не участвовал в обучении
+
+
+df_indep_test$pred_ag <- ifelse(predict_glm(formula_ag, df_train = df_data, df_test = df_indep_test) < limit_ag, 0, 1)
+# C_svm <- 1
+# df_indep_test$pred_ag <- ifelse(predict_svm(formula_ag, df_train = df_data, df_test = df_indep_test) < limit_ag, 0, 1)
+df_indep_test$pred_onmk <- ifelse(predict_glm(formula_onmk, df_train = df_data, df_test = df_indep_test) < limit_onmk, 0, 1)
+df_indep_test$pred_st <- ifelse(predict_glm(formula_st, df_train = df_data, df_test = df_indep_test) < limit_st, 0, 1)
+df_indep_test$pred_sn <- ifelse(predict_glm(formula_sn, df_train = df_data, df_test = df_indep_test) < limit_sn, 0, 1)
+df_indep_test$pred_another <- ifelse(predict_glm(formula_another, df_train = df_data, df_test = df_indep_test) < limit_another, 0, 1)
+
+
+(get_metrics(y_pred = df_indep_test$pred_ag, y_true = df_indep_test$`Артериальная гипертензия`) +
+    get_metrics(y_pred = df_indep_test$pred_onmk, y_true = df_indep_test$ОНМК) +
+    get_metrics(y_pred = df_indep_test$pred_st, y_true = df_indep_test$`Стенокардия, ИБС, инфаркт миокарда`) +
+    get_metrics(y_pred = df_indep_test$pred_sn, y_true = df_indep_test$`Сердечная недостаточность`) +
+    get_metrics(y_pred = df_indep_test$pred_another, y_true = df_indep_test$`Прочие заболевания сердца`)) / 5
+    
 
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -571,9 +622,9 @@ df_test_final$`Статус Курения`[df_test_final$`Статус Куре
 df_test_final <- prepare_data(df_test_final)
 
 
-# df_test_final$`Артериальная гипертензия` <- ifelse(predict_glm(formula_ag, df_train = df_data, df_test = df_test_final) < limit_ag, 0, 1)
-C_svm <- 1
-df_test_final$`Артериальная гипертензия` <- ifelse(predict_svm(formula_ag, df_train = df_data, df_test = df_test_final) < limit_ag, 0, 1)
+df_test_final$`Артериальная гипертензия` <- ifelse(predict_glm(formula_ag, df_train = df_data, df_test = df_test_final) < limit_ag, 0, 1)
+# C_svm <- 1
+# df_test_final$`Артериальная гипертензия` <- ifelse(predict_svm(formula_ag, df_train = df_data, df_test = df_test_final) < limit_ag, 0, 1)
 df_test_final$`ОНМК` <- ifelse(predict_glm(formula_onmk, df_train = df_data, df_test = df_test_final) < limit_onmk, 0, 1)
 df_test_final$`Стенокардия, ИБС, инфаркт миокарда` <- ifelse(predict_glm(formula_st, df_train = df_data, df_test = df_test_final) < limit_st, 0, 1)
 df_test_final$`Сердечная недостаточность` <- ifelse(predict_glm(formula_sn, df_train = df_data, df_test = df_test_final) < limit_sn, 0, 1)
